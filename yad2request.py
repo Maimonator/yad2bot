@@ -1,6 +1,9 @@
+import ipdb
 from abc import abstractmethod
 import re
 from bs4 import BeautifulSoup
+import copy
+import requests
 
 city=5000 # Tel Aviv
 
@@ -68,7 +71,7 @@ class Yad2Apartment(object):
     HTML_ROOM_KEY = "data_rooms"
     HTML_FLOOR_KEY = "data_floor"
     HTML_SIZE_KEY = "data_SquareMeter"
-    HTML_ADDRESS_KEY = "_title"
+    HTML_ADDRESS_KEY = "title"
     def __init__(self, item_id, price, address, num_rooms):
         super(Yad2Apartment, self).__init__()
         self.item_id = item_id
@@ -80,22 +83,53 @@ class Yad2Apartment(object):
         price = self.price
         num_rooms = self.num_rooms
         address = self.address
-        return f"Price : {price}\nNumber Of Rooms: {num_rooms}\nAddress: {address}"
+        itemid = self.item_id
+        url = f"https://www.yad2.co.il/item/{itemid}/"
+        return f"Price : {price}\nNumber Of Rooms: {num_rooms}\nAddress: {address}\nURL: {url}"
+
+
+    def to_dict(self):
+        dic = {"id": self.item_id,
+        "price": self.price,
+        "address": self.address,
+        "num_rooms": self.num_rooms,
+        }
+        return dic
+
+    def to_string(self, travel_distance, travel_time):
+        st = str(self)
+        st = f"{st}\nDistance: {travel_distance}\n Time: {travel_time}"
+        return st
+
+
+    def __eq__(self, other):
+        pass
+
+    @classmethod
+    def from_dict(cls, dic):
+        item_id = dic['id']
+        price = dic['price']
+        num_rooms = dic['num_rooms']
+        address = dic['address']
+        return cls(item_id, price, num_rooms, address)
 
     @classmethod
     def from_html_div(cls, bs4_tag):
+        # ipdb.set_trace()
         item_id = bs4_tag[Yad2Apartment.HTML_ITEMID_KEY]
-        price_tag = bs4_tag.find("div", {"id" : lambda x : x is not None and x.find(Yad2Apartment.HTML_PRICE_KEY)})
-        address_tag = bs4_tag.find("span", {"id" : lambda x : x is not None and x.find(Yad2Apartment.HTML_PRICE_KEY)})
-        num_rooms_tag = bs4_tag.find("span", {"id" : lambda x : x is not None and x.find(Yad2Apartment.HTML_ROOM_KEY)})
-        floor_tag = bs4_tag.find("span", {"id" : lambda x : x is not None and x.find(Yad2Apartment.HTML_FLOOR_KEY)})
-        size_tag = bs4_tag.find("span", {"id" : lambda x : x is not None and x.find(Yad2Apartment.HTML_SIZE_KEY)})
+        price_tag = bs4_tag.findAll("div", {"id" : lambda x : x and x.find(Yad2Apartment.HTML_PRICE_KEY)})[-1]
+        address_tag = bs4_tag.findAll("span", {"class" : lambda x : x and x.startswith(Yad2Apartment.HTML_ADDRESS_KEY)})[-1]
+        num_rooms_tag = bs4_tag.findAll("span", {"id" : lambda  x : x and x.startswith(Yad2Apartment.HTML_ROOM_KEY)})[-1]
+        floor_tag = bs4_tag.findAll("span", {"id" : lambda x : x and x.startswith(Yad2Apartment.HTML_FLOOR_KEY)})[-1]
+        size_tag = bs4_tag.findAll("span", {"id" : lambda x : x and x.startswith(Yad2Apartment.HTML_SIZE_KEY)})[-1]
 
-        price = price_tag.content.strip()
-        num_rooms = num_rooms_tag.content.strip()
-        address = address_tag.content.strip()
+        # print(price_tag)
+        # ipdb.set_trace()
+        price =  price_tag.contents[0].strip()
+        num_rooms = num_rooms_tag.contents[0].strip()
+        address = address_tag.contents[0].strip()
 
-        return cls(price, num_rooms, address)
+        return cls(item_id, price, address, num_rooms)
 
 class Yad2Request(object):
     """docstring for Yad2Request"""
@@ -109,9 +143,9 @@ class Yad2Request(object):
         self.cookie = cookie
 
     @staticmethod
-    def _generate_params_str(params):
+    def _generate_params_str(params_dict):
         params = []
-        for key, val in params.items():
+        for key, val in params_dict.items():
             params.append(Yad2SearchParam(key, val))
 
         params = map(lambda x: str(x), params)
@@ -123,7 +157,7 @@ class Yad2Request(object):
         params = Yad2Request._generate_params_str(params)
         return f"{base_url}?{params}"
 
-    @static_method
+    @staticmethod
     def _append_params(url, params):
         params = Yad2Request._generate_params_str(params)
         return f"{url}&{params}"
@@ -131,15 +165,20 @@ class Yad2Request(object):
     def send_request(self, extra_params):
         cookies = {Yad2Request : self.cookie}
         headers = {"User-Agent" : Yad2Request.USER_AGENT}
-        self.search_params.update(extra_params)
-        url = Yad2Request._construct_search_url(self.base_url, self.search_params)
+        params = copy.copy(self.search_params)
+        params.update(extra_params)
+        url = Yad2Request._construct_search_url(self.base_url, params)
 
         response = requests.get(url, cookies=cookies, headers=headers)
+        return response
 
     def _get_items_from_page(self, page_num):
         extra_params = {"page":page_num}
         response = self.send_request(extra_params)
         html = BeautifulSoup(response.content, 'html.parser')
-        items_divs = html.findAll("div", {"id" : lambda x : x is not None and x.startswith("feed_item_")})
+        items_divs = html.findAll("div", {"id" : lambda x : x and x.startswith("feed_item_") and not x.endswith("price")})
+        items_divs = filter(lambda x: x is not None , items_divs)
+        # x = list(items_divs)
+        # ipdb.set_trace()
         items = map(lambda x: Yad2Apartment.from_html_div(x), items_divs)
         return items
